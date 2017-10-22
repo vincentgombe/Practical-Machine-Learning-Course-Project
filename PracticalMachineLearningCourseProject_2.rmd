@@ -1,0 +1,319 @@
+---
+title: "Practical Machine Learning Course Project_2"
+author: "Vincent Gombe"
+date: "22 October 2017"
+output: html_document
+---
+
+
+#Introduction
+
+The objective of this project is to use machine learning to predict the manner in which 6 participants performed some exercise as described below. The target field is the classe variable in the data. 
+
+A random forest model with a 99.67% accuracy was chosen and used to score the 20 test cases available in the test data and the predictions are submitted in appropriate format to the Course Project Prediction Quiz for automated grading.
+
+
+#Read in the data
+
+
+The source of the data for this project is http://groupware.les.inf.puc-rio.br/har
+the data has been split into two: training set and testing set.
+The training data is can be downloaded from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv and the testing data can be downloaded from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The respective data sets are first downloaded and read into R.
+
+```{r}
+
+setwd("C:/Users/Vincent/Cousera/Practical Machine Learning")
+
+#dir <- getwd()
+#dest <- "./data/pml-training.csv"
+#dest2 <- "./data/pml-testing.csv"
+
+
+#download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",dest)
+#download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",dest2)
+
+training <- read.csv("./data/pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+testing  <- read.csv("./data/pml-testing.csv",  na.strings = c("NA", "#DIV/0!", ""))
+
+```
+
+```{r}
+
+#install.packages("rlang")
+library(rlang)
+
+```
+
+```{r}
+#library(knitr)
+#library(caret)
+#library(rpart)
+#library(rpart.plot)
+#install.packages("rattle")
+#library(rattle)
+#library(randomForest)
+#library(corrplot)
+
+
+```
+
+
+#Data Understanding
+
+```{r}
+
+dim(training)
+```
+
+
+There are 19, 622 in the training data set with 160 variables. the structure of the first ten variables is explored below.
+
+```{r}
+str(training, list.len=10)
+```
+
+
+Next we look at the target variable.
+
+```{r}
+
+str(training$classe)
+table(training$classe)
+prop.table(table(training$classe))
+#prop.table(table(training$user_name, training$classe), 1)
+
+#install.packages("ggplot2")
+library(ggplot2)
+
+vols <- ggplot(data = training) +
+  geom_bar(mapping = aes(x=classe,colour = I("blue"),fill=I("White")))
+
+vols
+
+volsByUser <- vols + facet_grid(.~training$user_name)
+
+volsByUser
+    
+```
+
+The target variable , classe is a factor variable with 5 levels, A through to E.
+
+
+# Data Cleansing
+
+The first six fields appear to be mostly ID fields which can not be used for modelling, thus we exclude these form our samples.
+
+
+```{r}
+
+training <- training[, 7:160]
+testing  <- testing[, 7:160]
+
+```
+
+Next we remove fields that contain mostly missing values.
+
+
+```{r}
+dataCleanse  <- apply(!is.na(training), 2, sum) > 19621 
+training <- training[, dataCleanse]
+testing  <- testing[, dataCleanse]
+```
+
+#Data split
+
+For model validation purposes, we need to hold back part of the training data which we can use for meodel validation before testing on the testing sample. The data is randomly sampled with 60% into the building sample and 40% into the hold out sample.
+
+
+```{r}
+#install.packages("dplyr")
+```
+
+```{r}
+require(caret)
+require(dplyr)
+set.seed(12354)
+inTrain <- createDataPartition(y=training$classe, p=3/5, list=FALSE)
+build  <- training[inTrain,]
+holdOut  <- training[-inTrain,]
+dim(build)
+dim(holdOut)
+
+```
+
+
+Our build sample 11,776 rows whilst the holdOut sample has 7,846.
+
+
+Furthermore, our data set now has 54 varaiables. Before we proceed we can quickly check for zero covariates from our samples by taking advantage of the nearZeroVar function of the caret package in case we can eliminate further fields before we beigin our analysis.
+
+
+```{r}
+
+zero_Cov <- nearZeroVar(build)
+if(length(zero_Cov) > 0) {
+  build <- build[, -zero_Cov]
+  holdOut <- holdOut[, -zero_Cov]
+}
+dim(build)
+
+```
+
+After this, our build sample still has the same number of fields, 54, thus we don't seem to have any near zero covariates. That means we still have 53 predictors, which is a big number. Thus, next we try to eliminate some of the predictors based on their relative importance based on the output of a quick and dirt random forst algogorithm.
+
+#Data Reduction
+we use the random forest discussed above. First we will use the top ten covariates from here and asses model accuracy to see if we need to use more.
+
+```{r}
+#install.packages(randomForest)
+require(randomForest)
+set.seed(12355)
+randomForestCheck <- randomForest(classe~., data=build, importance=TRUE, ntree=100)
+varImpPlot(randomForestCheck)
+
+```
+
+We first try the top ten covariates which are ; roll_belt, yaw_belt, pitch_belt, magnet_dumbbell_z, magnet_dumbbell_y, pitch_forearm, pitch_forearm, accl_dumbbell_y,roll_arm, roll_forearm. First we llok at the correlations of these variables. we set our our correlation cut off to 75%.
+
+```{r}
+
+topTen <- c("roll_belt","yaw_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","roll_forearm")
+
+corCheck = cor(build[,topTen])
+diag(corCheck) <- 0
+which(abs(corCheck)> 3/4, arr.ind=TRUE)
+
+```
+
+```{r}
+cor(build$roll_belt, build$yaw_belt)
+```
+variables roll_belt and yaw_belt show a correlation of 81.5%, which could present multi colinearity problems. These are the top two most important variables, but we still eliminate yaw_belt, wich is the less important of the two.
+
+```{r}
+
+topNine <- c("roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","roll_forearm")
+
+corCheck2 = cor(build[,topNine])
+diag(corCheck2) <- 0
+
+max(corCheck2)
+
+```
+
+Eliminating yaw_belt now gives a maximum correlation of 48.5%.
+
+#Exploratory Analysis
+
+We now take a look at the relationship between some of the variables and our target variable.
+
+```{r}
+
+qplot(data= build, roll_belt, magnet_dumbbell_y, colour=classe)
+
+```
+
+
+This graph vindicates our earlier finding that roll_belt is the most important variable as it clearly suggets that we could possibly group these data based on the values of roll_belt.
+
+
+
+
+#Prediction Model Building
+
+We will now try two different methods for the finla model. Decision tree and random forest. the best one based on model accuracy on the hold out sample will be picked.
+
+
+## a) Decision Tree
+
+
+
+```{r}
+#install.packages("rpart.plot")
+require(rpart.plot)
+
+fitTreeModel <- rpart(classe~., data=build, method="class")
+prp(fitTreeModel)
+```
+
+Our tree classifier with all the 53 predictors also selects roll_belt as the first predictor.
+
+Next we test our decision tree on the hold out sample.
+
+```{r}
+
+treeModelPredict <- predict(fitTreeModel, newdata=holdOut, type="class")
+decTree_conMat <- confusionMatrix(treeModelPredict, holdOut$classe)
+decTree_conMat
+
+```
+
+Our decision tree model has an accuracy of 73.72%. Which may be improved upon by other methods.
+
+
+## b) Random Forest
+
+For the random forest we will only use the top nine predictors identified in our exploratory anlysis.
+
+```{r}
+
+set.seed(345123)
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+fitRandForest <- train(classe ~ roll_belt + num_window + pitch_belt + magnet_dumbbell_z + magnet_dumbbell_y + pitch_forearm + accel_dumbbell_y + roll_arm + roll_forearm, data=build, method="rf",
+                          trControl=controlRF)
+fitRandForest$finalModel
+
+```
+
+
+Next we use our model for scoring the hold out sample.
+
+```{r}
+
+randForestPredict <- predict(fitRandForest, newdata=holdOut)
+randForest_ConMatrix <- confusionMatrix(randForestPredict, holdOut$classe)
+randForest_ConMatrix
+
+```
+
+The accuracy of our random forrest model on the holdout sample is 99.67%. Even with only nine predictors it has a high accuracy and is better than the decision tree model.
+
+99.67% is a cery good accuracy and this random forest model will be adopted for scoring.
+
+##Out of sample error
+
+```{r}
+
+missClass = function(values, randForestPredict) {
+  sum(randForestPredict != values) / length(values)
+}
+outOfsampleError = missClass(holdOut$classe, randForestPredict)
+outOfsampleError
+
+```
+Our final model has an out of sample error rate of 0.3%.
+
+
+#Submission
+
+Now we use the random forest model to score the twenty observations in our testing data.
+
+```{r}
+
+prediction_test <- predict(fitRandForest, newdata=testing)
+testing$classe <- prediction_test
+
+```
+
+```{r}
+
+submitData <- data.frame(problem_id = testing$problem_id, classe = prediction_test)
+write.csv(submitData, file = "courseSubmission.csv", row.names = FALSE)
+
+submitData
+```
+
+
+
